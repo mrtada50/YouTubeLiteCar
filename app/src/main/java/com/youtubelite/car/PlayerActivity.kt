@@ -36,6 +36,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var msg: TextView
     private lateinit var exitFs: Button
     private var fs = false
+    private var fallback = false
     private var vid = ""
     private var title = ""
     private var channel = ""
@@ -67,7 +68,7 @@ class PlayerActivity : ComponentActivity() {
         w.setBackgroundColor(Color.BLACK)
         w.addJavascriptInterface(Bridge(), "A")
         w.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest) = true
+            override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest) = !fallback
         }
         frame.addView(w, FrameLayout.LayoutParams(MATCH, MATCH))
         msg = tv("", 20f, Color.WHITE).apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(24), dp(24), dp(24)); visibility = View.GONE }
@@ -141,11 +142,19 @@ class PlayerActivity : ComponentActivity() {
         web?.loadDataWithBaseURL("https://www.youtube.com", html(), "text/html", "utf-8", null)
     }
 
-    private fun html() = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style></head><body><div id="p"></div><script>var pl;function onYouTubeIframeAPIReady(){pl=new YT.Player('p',{width:'100%',height:window.innerHeight,videoId:'$vid',playerVars:{playsinline:1,rel:0,fs:0,autoplay:1},events:{onReady:function(e){try{e.target.setPlaybackQuality('large')}catch(x){}e.target.playVideo()},onError:function(e){A.error(e.data)}}})}window.onresize=function(){if(pl&&pl.setSize)pl.setSize(window.innerWidth,window.innerHeight)};</script><script src="https://www.youtube.com/iframe_api" onerror="A.error(-1)"></script></body></html>"""
+    private fun html() = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style></head><body><div id="p"></div><script>var pl;function onYouTubeIframeAPIReady(){pl=new YT.Player('p',{width:'100%',height:window.innerHeight,videoId:'$vid',playerVars:{origin:'https://www.youtube.com',playsinline:1,rel:0,fs:0,autoplay:1},events:{onReady:function(e){try{e.target.setPlaybackQuality('large')}catch(x){}e.target.playVideo()},onError:function(e){A.error(e.data)}}})}window.onresize=function(){if(pl&&pl.setSize)pl.setSize(window.innerWidth,window.innerHeight)};</script><script src="https://www.youtube.com/iframe_api" onerror="A.error(-1)"></script></body></html>"""
 
     private fun js(s: String) { web?.evaluateJavascript(s, null) }
 
     private fun showErr(code: Int) {
+        if (code == 101 || code == 150 || code == 152 || code == 153) {
+            // صاحب الفيديو يمنع التضمين: نفتحه عبر موقع يوتيوب الرسمي داخل نفس الشاشة
+            fallback = true
+            msg.visibility = View.GONE
+            Toast.makeText(this, "الفيديو لا يسمح بالتضمين، يُفتح عبر موقع يوتيوب", Toast.LENGTH_LONG).show()
+            web?.loadUrl("https://m.youtube.com/watch?v=$vid")
+            return
+        }
         msg.text = when (code) {
             2 -> "رابط الفيديو غير صالح"
             5 -> "تعذر تشغيل الفيديو على هذا الجهاز"
