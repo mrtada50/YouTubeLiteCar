@@ -21,13 +21,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Check API key secret
-        run: |
-          if [ -z "$YT_API_KEY" ]; then
-            echo "::error::YT_API_KEY secret is EMPTY - add it under Settings > Secrets and variables > Actions > Repository secrets"
-            exit 1
-          fi
-          echo "YT_API_KEY found, length: ${#YT_API_KEY}"
       - name: Unit tests and debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Verify debug APK

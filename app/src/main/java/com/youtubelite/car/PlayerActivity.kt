@@ -1,6 +1,12 @@
 package com.youtubelite.car
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.URLEncoder
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -31,6 +37,10 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var exitFs: Button
     private var fs = false
     private var vid = ""
+    private var title = ""
+    private var channel = ""
+    private var thumb = ""
+    private lateinit var titleTv: TextView
 
     inner class Bridge {
         @JavascriptInterface fun error(code: Int) { runOnUiThread { showErr(code) } }
@@ -43,13 +53,9 @@ class PlayerActivity : ComponentActivity() {
         if (id == null || !Regex("[A-Za-z0-9_-]{6,20}").matches(id)) { finish(); return }
         vid = id
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val title = intent.getStringExtra("title") ?: ""
-        lifecycleScope.launch {
-            AppDb.get(applicationContext).dao().addHistory(
-                HistoryItem(videoId = id, title = title, channel = intent.getStringExtra("channel") ?: "",
-                    thumb = intent.getStringExtra("thumb") ?: "", watchedAt = System.currentTimeMillis())
-            )
-        }
+        title = intent.getStringExtra("title") ?: ""
+        channel = intent.getStringExtra("channel") ?: ""
+        thumb = (intent.getStringExtra("thumb") ?: "").ifEmpty { "https://i.ytimg.com/vi/$id/mqdefault.jpg" }
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK) }
         val frame = FrameLayout(this)
@@ -70,10 +76,13 @@ class PlayerActivity : ComponentActivity() {
         frame.addView(exitFs, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END))
 
         bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setBackgroundColor(BG) }
-        bar.addView(tv(title, 16f, FG).apply { maxLines = 2 }, lp(0, WRAP, 1f))
+        titleTv = tv(title, 16f, FG).apply { maxLines = 2 }
+        bar.addView(titleTv, lp(0, WRAP, 1f))
         bar.addView(btn("تشغيل/إيقاف") { js("if(pl){pl.getPlayerState()==1?pl.pauseVideo():pl.playVideo()}") }, lp(WRAP))
         bar.addView(btn("صوت -") { js("if(pl){pl.setVolume(Math.max(0,pl.getVolume()-10))}") }, lp(WRAP))
         bar.addView(btn("صوت +") { js("if(pl){pl.setVolume(Math.min(100,pl.getVolume()+10))}") }, lp(WRAP))
+        bar.addView(btn("مفضلة") { toggleFav() }, lp(WRAP))
+        bar.addView(btn("قائمة") { addToPlaylist() }, lp(WRAP))
         bar.addView(btn("ملء الشاشة") { setFs(true) }, lp(WRAP))
         bar.addView(btn("رجوع") { finish() }, lp(WRAP))
         root.addView(frame, LinearLayout.LayoutParams(MATCH, 0, 1f))
@@ -83,7 +92,49 @@ class PlayerActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if (fs) setFs(false) else finish() }
         })
+        lifecycleScope.launch {
+            if (title.isEmpty()) {
+                val m = withContext(Dispatchers.IO) { fetchMeta(id) }
+                if (m != null) { title = m.first; channel = m.second; titleTv.text = title }
+            }
+            AppDb.get(applicationContext).dao().addHistory(
+                HistoryItem(videoId = id, title = title.ifEmpty { id }, channel = channel, thumb = thumb, watchedAt = System.currentTimeMillis())
+            )
+        }
         load()
+    }
+
+    // عنوان الفيديو من oEmbed العام (بدون مفتاح API)
+    private fun fetchMeta(id: String): Pair<String, String>? = try {
+        val u = "https://www.youtube.com/oembed?format=json&url=" + URLEncoder.encode("https://www.youtube.com/watch?v=$id", "UTF-8")
+        val j = JSONObject(Api.http("GET", u))
+        j.getString("title") to j.optString("author_name")
+    } catch (e: Exception) { null }
+
+    private fun toggleFav() {
+        lifecycleScope.launch {
+            val dao = AppDb.get(applicationContext).dao()
+            if (dao.isFav(vid) > 0) { dao.delFav(vid); Toast.makeText(this@PlayerActivity, "أُزيل من المفضلة", Toast.LENGTH_SHORT).show() }
+            else {
+                dao.addFav(Favorite(vid, title.ifEmpty { vid }, channel, thumb, System.currentTimeMillis()))
+                Toast.makeText(this@PlayerActivity, "أُضيف إلى المفضلة", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun addToPlaylist() {
+        lifecycleScope.launch {
+            val dao = AppDb.get(applicationContext).dao()
+            val pls = dao.playlists()
+            if (pls.isEmpty()) { Toast.makeText(this@PlayerActivity, "أنشئ قائمة محلية من المكتبة أولاً", Toast.LENGTH_SHORT).show(); return@launch }
+            AlertDialog.Builder(this@PlayerActivity).setTitle("اختر القائمة")
+                .setItems(pls.map { it.name }.toTypedArray()) { _, i ->
+                    lifecycleScope.launch {
+                        dao.addPlaylistItem(LocalPlaylistItem(pls[i].id, vid, title.ifEmpty { vid }, channel, thumb, System.currentTimeMillis()))
+                        Toast.makeText(this@PlayerActivity, "تمت الإضافة", Toast.LENGTH_SHORT).show()
+                    }
+                }.show()
+        }
     }
 
     private fun load() {

@@ -3,8 +3,7 @@
 مشغل يوتيوب خفيف للشاشات الأفقية (Android 10، RAM 1GB). Kotlin + Room + YouTube IFrame Player الرسمي.
 
 ## الإعداد
-1. Google Cloud Console: فعّل YouTube Data API v3 وأنشئ API Key (في API restrictions اختر YouTube Data API v3 فقط، واترك Application restrictions على None لأن التطبيق لا يرسل بصمة الحزمة مع الطلبات).
-2. GitHub > Settings > Secrets > Actions: أضف `YT_API_KEY`.
+1. لا حاجة لمفتاح API: البحث عبر موقع يوتيوب الرسمي داخل التطبيق، والتشغيل عبر مشغل IFrame الرسمي.
 3. OAuth (اختياري لقوائم الحساب): أنشئ OAuth Client من نوع Android بالحزمة `com.youtubelite.car` وبصمة SHA-1 للتوقيع الذي تثبّت به، وفعّل شاشة الموافقة وأضف نفسك كمستخدم اختبار. النطاق المستخدم: `youtube`.
 4. توقيع Release (اختياري): أضف Secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
 

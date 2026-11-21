@@ -7,7 +7,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.annotation.SuppressLint
+import android.net.Uri as AUri
 import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import java.net.URLEncoder
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -39,6 +46,8 @@ class MainActivity : ComponentActivity() {
     private var searchJob: Job? = null
     private var searchType = "video"
     private var libTab = 0
+    private var curWeb: WebView? = null
+    private var backHook: (() -> Boolean)? = null
     private val FAV_REMOVE = "إزالة من المفضلة"
 
     private val authLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
@@ -69,6 +78,7 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (backHook?.invoke() == true) return
                 if (stack.size > 1) { stack.removeAt(stack.size - 1); redraw() } else finish()
             }
         })
@@ -78,7 +88,13 @@ class MainActivity : ComponentActivity() {
     // ---------- تنقل ----------
     private fun nav(r: () -> View) { stack.clear(); push(r) }
     private fun push(r: () -> View) { stack.add(r); redraw() }
-    private fun redraw() { content.removeAllViews(); content.addView(stack.last().invoke()) }
+    private fun redraw() { releaseWeb(); content.removeAllViews(); content.addView(stack.last().invoke()) }
+    private fun releaseWeb() {
+        backHook = null
+        curWeb?.let { (it.parent as? ViewGroup)?.removeView(it); it.stopLoading(); it.loadUrl("about:blank"); it.destroy() }
+        curWeb = null
+    }
+    override fun onDestroy() { releaseWeb(); super.onDestroy() }
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun hideKb(v: View) { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0) }
 
@@ -242,55 +258,62 @@ class MainActivity : ComponentActivity() {
         return col
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
     private fun searchView(initial: String = ""): View {
-        val ad = VidAdapter({ play(it) }, { actions(it, emptyList()) })
         val et = EditText(this).apply {
-            hint = "ابحث عن فيديو أو قناة"; setSingleLine(); setTextColor(FG); setHintTextColor(Color.GRAY)
+            hint = "ابحث في يوتيوب"; setSingleLine(); setTextColor(FG); setHintTextColor(Color.GRAY)
             textSize = 18f; imeOptions = EditorInfo.IME_ACTION_SEARCH; setText(initial)
         }
-        val status = tv("", 16f, Color.GRAY)
-        var next: String? = null
-        val more = btn("المزيد") { }
-        more.visibility = View.GONE
-
-        fun doSearch(page: String?) {
-            val q = et.text.toString().trim()
-            if (q.length < 2) return
-            status.visibility = View.VISIBLE; status.text = "جاري البحث..."
-            lifecycleScope.launch {
-                try {
-                    val (l, n) = Api.search(dao, q, searchType, page)
-                    if (page == null) ad.set(l) else ad.add(l)
-                    next = n
-                    more.visibility = if (n != null) View.VISIBLE else View.GONE
-                    if (ad.itemCount == 0) status.text = "لا توجد نتائج" else status.visibility = View.GONE
-                } catch (e: CancellationException) { throw e
-                } catch (e: Exception) { status.text = errText(e) }
+        val wv = WebView(this)
+        curWeb = wv
+        wv.settings.javaScriptEnabled = true
+        wv.settings.domStorageEnabled = true
+        wv.setBackgroundColor(BG)
+        var lastId = ""
+        var lastT = 0L
+        fun videoId(url: String): String? {
+            val u = AUri.parse(url)
+            val path = u.path ?: return null
+            val id = when {
+                path.startsWith("/watch") -> u.getQueryParameter("v")
+                path.startsWith("/shorts/") -> u.lastPathSegment
+                else -> null
+            }
+            return id?.takeIf { Regex("[A-Za-z0-9_-]{6,20}").matches(it) }
+        }
+        fun launchVideo(id: String): Boolean {
+            val now = System.currentTimeMillis()
+            if (id == lastId && now - lastT < 2500) return true
+            lastId = id; lastT = now
+            play(Vid(id, "", "", "https://i.ytimg.com/vi/$id/mqdefault.jpg"))
+            return true
+        }
+        wv.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
+                val id = videoId(r.url.toString())
+                return if (id != null) launchVideo(id) else false
+            }
+            override fun doUpdateVisitedHistory(v: WebView, url: String, isReload: Boolean) {
+                val id = videoId(url) ?: return
+                v.post { if (v.canGoBack()) v.goBack() }
+                launchVideo(id)
             }
         }
-        more.setOnClickListener { doSearch(next) }
-        val toggle = btn(if (searchType == "video") "فيديو" else "قناة") { }
-        toggle.setOnClickListener {
-            searchType = if (searchType == "video") "channel" else "video"
-            toggle.text = if (searchType == "video") "فيديو" else "قناة"
-            ad.set(emptyList()); doSearch(null)
+        fun open(q: String) {
+            if (q.isBlank()) wv.loadUrl("https://m.youtube.com")
+            else wv.loadUrl("https://m.youtube.com/results?search_query=" + URLEncoder.encode(q.trim(), "UTF-8"))
         }
         et.setOnEditorActionListener { _, a, _ ->
-            if (a == EditorInfo.IME_ACTION_SEARCH) { searchJob?.cancel(); hideKb(et); doSearch(null); true } else false
+            if (a == EditorInfo.IME_ACTION_SEARCH) { hideKb(et); open(et.text.toString()); true } else false
         }
-        et.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
-            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                searchJob?.cancel()
-                searchJob = lifecycleScope.launch { delay(700); doSearch(null) }
-            }
-        })
-        val head = LinearLayout(this).apply { addView(et, lp(0, WRAP, 1f)); addView(toggle, lp(WRAP)) }
+        backHook = { if (wv.canGoBack()) { wv.goBack(); true } else false }
+        val head = LinearLayout(this).apply {
+            addView(et, lp(0, WRAP, 1f)); addView(btn("بحث") { hideKb(et); open(et.text.toString()) }, lp(WRAP))
+        }
         val col = vbox().apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }
-        col.addView(head, lp()); col.addView(status, lp())
-        col.addView(recycler(ad), lp(MATCH, 0, 1f, 0)); col.addView(more, lp())
-        if (initial.isNotEmpty()) doSearch(null)
+        col.addView(head, lp())
+        col.addView(wv, lp(MATCH, 0, 1f, 0))
+        open(initial)
         return col
     }
 
@@ -350,8 +373,6 @@ class MainActivity : ComponentActivity() {
         val col = vbox().apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         col.addView(tv("الحساب", 24f, FG, true), lp())
         col.addView(tv(if (Auth.token != null) "الحالة: مسجّل الدخول" else "الحالة: وضع الضيف (البحث والمشاهدة والمفضلة والسجل والقوائم المحلية تعمل بدون حساب)", 17f), lp())
-        if (BuildConfig.YT_API_KEY.isEmpty())
-            col.addView(tv("تنبيه: مفتاح YouTube API غير مضبوط، البحث لن يعمل.", 16f, Color.parseColor("#FFB74D")), lp())
         if (Auth.token == null) {
             col.addView(btn("تسجيل الدخول بحساب Google") { withAuth { redraw() } }, lp())
         } else {
